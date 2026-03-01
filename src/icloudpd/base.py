@@ -980,6 +980,16 @@ def core_single_run(
                             )
                         # Album-folder-structure mode: mirror iOS Photos app folder/album hierarchy
                         folder_albums_dict = library_object.folder_albums
+                        # Filter to specific albums if --album was specified
+                        if user_config.albums:
+                            folder_albums_dict = {
+                                path: album
+                                for path, album in folder_albums_dict.items()
+                                if any(
+                                    requested in path
+                                    for requested in user_config.albums
+                                )
+                            }
                         downloaded_ids: Set[str] = set()
 
                         # Phase 1: download each user-created album to its folder path
@@ -1003,8 +1013,9 @@ def core_single_run(
                             if status_exchange.get_progress().cancel:
                                 break
 
-                        # Phase 2: download photos not in any user album to root
-                        if not status_exchange.get_progress().cancel:
+                        # Phase 2: download photos not in any album to root
+                        # (skipped when --album filter is active)
+                        if not status_exchange.get_progress().cancel and not user_config.albums:
                             root_downloader = make_downloader("none", directory)
                             download_photo_root = partial(root_downloader, icloud)
                             logger.info(

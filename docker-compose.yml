@@ -1,0 +1,17 @@
+services:
+  icloudpd:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+    image: icloudpd-custom:latest
+    volumes:
+      - /volume2/Photos/iCloud:/photos    # DS223 사진 저장 경로
+      - /volume2/Photos/icloudpd:/cookies # 인증 쿠키 저장 경로
+    environment:
+      - TZ=Asia/Seoul
+    command: >
+      --username your@icloud.com
+      --directory /photos
+      --folder-structure album
+      --cookie-directory /cookies
+      --no-progress-bar

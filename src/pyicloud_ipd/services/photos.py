@@ -350,72 +350,65 @@ class PhotoLibrary:
         return albums
 
     # albumType values returned by CPLAlbumByPositionLive
-    _ALBUM_TYPE_ALBUM = 1
+    _ALBUM_TYPE_ALBUM = 0
     _ALBUM_TYPE_FOLDER = 3
 
     @property
     def folder_albums(self) -> Dict[str, "PhotoAlbum"]:
         """Returns user-created albums keyed by their full folder path.
 
-        Path uses os.path.sep as separator, e.g. "Travel/Japan 2023".
-        Albums at the root level of the Photos app have paths like "AlbumName".
-        Folder containers (albumType=3) and smart albums are excluded.
+        Recursively traverses the folder hierarchy using CPLAlbumByPositionLive.
+        Root-level albums have paths like "AlbumName".
+        Albums inside folders have paths like "FolderName/AlbumName".
+        Folder containers (albumType=3) are traversed but not included as albums.
         Shared libraries always return an empty dict.
         """
         if self.library_type == "shared":
             return {}
 
-        records = self._fetch_folders()
-        by_id: Dict[str, Any] = {r["recordName"]: r for r in records}
-
+        result: Dict[str, "PhotoAlbum"] = {}
         root_ids: Set[str] = {"----Root-Folder----", "----Project-Root-Folder----"}
 
-        def get_path(record_id: str, visited: frozenset = frozenset()) -> str:
-            if record_id in root_ids or record_id not in by_id:
-                return ""
-            if record_id in visited:
-                return ""  # cycle protection
-            record = by_id[record_id]
-            fields = record["fields"]
-            if "albumNameEnc" not in fields:
-                return ""
-            name = clean_filename(base64.b64decode(fields["albumNameEnc"]["value"]).decode("utf-8"))
-            parent_id = fields.get("parentId", {}).get("value", "----Root-Folder----")
-            parent_path = get_path(parent_id, visited | {record_id})
-            return os.path.join(parent_path, name) if parent_path else name
+        def process_level(parent_id: str | None, parent_path: str) -> None:
+            records = self._fetch_level(parent_id)
+            for record in records:
+                record_id = record["recordName"]
+                if record_id in root_ids:
+                    continue
+                fields = record.get("fields", {})
+                if fields.get("isDeleted", {}).get("value"):
+                    continue
+                if "albumNameEnc" not in fields:
+                    continue
+                name = clean_filename(
+                    base64.b64decode(fields["albumNameEnc"]["value"]).decode("utf-8")
+                )
+                album_type = fields.get("albumType", {}).get("value", self._ALBUM_TYPE_ALBUM)
+                current_path = os.path.join(parent_path, name) if parent_path else name
 
-        result: Dict[str, "PhotoAlbum"] = {}
-        for record in records:
-            record_id = record["recordName"]
-            if record_id in root_ids:
-                continue
-            fields = record.get("fields", {})
-            if fields.get("isDeleted", {}).get("value"):
-                continue
-            album_type = fields.get("albumType", {}).get("value", self._ALBUM_TYPE_ALBUM)
-            if album_type != self._ALBUM_TYPE_ALBUM:
-                continue  # skip folder containers
+                if album_type == self._ALBUM_TYPE_ALBUM:
+                    obj_type = f"CPLContainerRelationNotDeletedByAssetDate:{record_id}"
+                    query_filter = [
+                        {
+                            "fieldName": "parentId",
+                            "comparator": "EQUALS",
+                            "fieldValue": {"type": "STRING", "value": record_id},
+                        }
+                    ]
+                    result[current_path] = PhotoAlbum(
+                        self.params,
+                        self.session,
+                        self.service_endpoint,
+                        current_path,
+                        "CPLContainerRelationLiveByAssetDate",
+                        obj_type,
+                        query_filter,
+                        zone_id=self.zone_id,
+                    )
+                elif album_type == self._ALBUM_TYPE_FOLDER:
+                    process_level(record_id, current_path)
 
-            path = get_path(record_id)
-            obj_type = f"CPLContainerRelationNotDeletedByAssetDate:{record_id}"
-            query_filter = [
-                {
-                    "fieldName": "parentId",
-                    "comparator": "EQUALS",
-                    "fieldValue": {"type": "STRING", "value": record_id},
-                }
-            ]
-            result[path] = PhotoAlbum(
-                self.params,
-                self.session,
-                self.service_endpoint,
-                path,
-                "CPLContainerRelationLiveByAssetDate",
-                obj_type,
-                query_filter,
-                zone_id=self.zone_id,
-            )
-
+        process_level(None, "")
         return result
 
     def _fetch_folders(self) -> Sequence[Dict[str, Any]]:
@@ -433,6 +426,39 @@ class PhotoLibrary:
         response = request.json()
 
         return typing.cast(Sequence[Dict[str, Any]], response["records"])
+
+    def _fetch_level(self, parent_id: str | None) -> Sequence[Dict[str, Any]]:
+        """Fetch albums/folders at a given hierarchy level.
+
+        parent_id=None fetches root-level items.
+        parent_id=<folder_uuid> fetches items directly inside that folder.
+        """
+        url = f"{self.service_endpoint}/records/query?{urlencode(self.params)}"
+        if parent_id is None:
+            json_data = json.dumps(
+                {
+                    "query": {"recordType": "CPLAlbumByPositionLive"},
+                    "zoneID": self.zone_id,
+                }
+            )
+        else:
+            json_data = json.dumps(
+                {
+                    "query": {
+                        "recordType": "CPLAlbumByPositionLive",
+                        "filterBy": [
+                            {
+                                "fieldName": "parentId",
+                                "comparator": "EQUALS",
+                                "fieldValue": {"type": "STRING", "value": parent_id},
+                            }
+                        ],
+                    },
+                    "zoneID": self.zone_id,
+                }
+            )
+        request = self.session.post(url, data=json_data, headers={"Content-type": "text/plain"})
+        return typing.cast(Sequence[Dict[str, Any]], request.json().get("records", []))
 
     @property
     def all(self) -> "PhotoAlbum":

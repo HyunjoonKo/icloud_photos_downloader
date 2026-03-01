@@ -16,6 +16,22 @@ Support for OS locale added
 
 Specifying `--folder-structure none` will put all files into one folder.
 
+### Album Mode
+
+```{versionadded} 1.32.2
+```
+
+Specifying `--folder-structure album` organizes photos to mirror the iCloud Photos album and folder hierarchy, instead of using date-based folders.
+
+- Photos that belong to an album are saved under the album's path, e.g. `Influencer/Model A/photo.jpg`
+- Nested folders are supported: `ParentFolder/SubFolder/AlbumName/photo.jpg`
+- Photos not assigned to any album are saved directly in the root `--directory`
+- Use `--album <name>` together with `--folder-structure album` to limit the download to a specific folder or album
+
+```shell
+icloudpd --directory /data --username my@email.address --folder-structure album
+```
+
 ### Formatting
 
 `icloudpd` follows [Python string formatting grammar](https://docs.python.org/3/library/string.html#formatstrings) for [`--folder-structure`](folder-structure-parameter) parameter, e.g. `{:%Y}` extracts only the 4-digit year from the creation date. Full list of format codes is [available](https://docs.python.org/3/library/datetime.html#strftime-and-strptime-format-codes).

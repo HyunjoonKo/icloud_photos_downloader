@@ -27,3 +27,4 @@ node_modules/
 .cookies/
 
 .claude/
+*.tar

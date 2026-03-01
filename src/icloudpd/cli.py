@@ -311,7 +311,7 @@ def add_global_options(parser: argparse.ArgumentParser) -> argparse.ArgumentPars
         "--log-level",
         help="Log level. Default: %(default)s",
         choices=["debug", "info", "error"],
-        default="debug",
+        default="info",
         type=lower,
     )
     cloned.add_argument(

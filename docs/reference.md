@@ -259,8 +259,10 @@ This is a list of all options available for the command line interface (CLI) of 
     ```
 (folder-structure-parameter)=
 `--folder-structure X`
-    
+
 :   Specifies the subfolder naming scheme.
+
+    Use `--folder-structure album` to mirror the iCloud Photos album/folder hierarchy instead of date-based folders.
 
     ```{seealso}
     Details in the [Folder structure](folder-structure) section.
@@ -374,3 +376,12 @@ This is a list of all options available for the command line interface (CLI) of 
     ```{note}
     The date is when the asset was created, not when it was added to iCloud.
     ```
+
+(log-level-parameter)=
+`--log-level X`
+
+:   Sets the verbosity of log output. Accepted values: `debug`, `info`, `error`.
+
+    Default: `info`
+
+    Use `--log-level debug` to print detailed diagnostic messages useful for troubleshooting.
