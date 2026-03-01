@@ -2,10 +2,11 @@ import base64
 import copy
 import json
 import logging
+import os
 import re
 import typing
 from datetime import datetime
-from typing import Any, Callable, Dict, Generator, Sequence, Tuple, cast
+from typing import Any, Callable, Dict, Generator, Sequence, Set, Tuple, cast
 from urllib.parse import urlencode
 
 import pytz
@@ -347,6 +348,75 @@ class PhotoLibrary:
             albums[folder_name] = album
 
         return albums
+
+    # albumType values returned by CPLAlbumByPositionLive
+    _ALBUM_TYPE_ALBUM = 1
+    _ALBUM_TYPE_FOLDER = 3
+
+    @property
+    def folder_albums(self) -> Dict[str, "PhotoAlbum"]:
+        """Returns user-created albums keyed by their full folder path.
+
+        Path uses os.path.sep as separator, e.g. "Travel/Japan 2023".
+        Albums at the root level of the Photos app have paths like "AlbumName".
+        Folder containers (albumType=3) and smart albums are excluded.
+        Shared libraries always return an empty dict.
+        """
+        if self.library_type == "shared":
+            return {}
+
+        records = self._fetch_folders()
+        by_id: Dict[str, Any] = {r["recordName"]: r for r in records}
+
+        root_ids: Set[str] = {"----Root-Folder----", "----Project-Root-Folder----"}
+
+        def get_path(record_id: str, visited: frozenset = frozenset()) -> str:
+            if record_id in root_ids or record_id not in by_id:
+                return ""
+            if record_id in visited:
+                return ""  # cycle protection
+            record = by_id[record_id]
+            fields = record["fields"]
+            if "albumNameEnc" not in fields:
+                return ""
+            name = clean_filename(base64.b64decode(fields["albumNameEnc"]["value"]).decode("utf-8"))
+            parent_id = fields.get("parentId", {}).get("value", "----Root-Folder----")
+            parent_path = get_path(parent_id, visited | {record_id})
+            return os.path.join(parent_path, name) if parent_path else name
+
+        result: Dict[str, "PhotoAlbum"] = {}
+        for record in records:
+            record_id = record["recordName"]
+            if record_id in root_ids:
+                continue
+            fields = record.get("fields", {})
+            if fields.get("isDeleted", {}).get("value"):
+                continue
+            album_type = fields.get("albumType", {}).get("value", self._ALBUM_TYPE_ALBUM)
+            if album_type != self._ALBUM_TYPE_ALBUM:
+                continue  # skip folder containers
+
+            path = get_path(record_id)
+            obj_type = f"CPLContainerRelationNotDeletedByAssetDate:{record_id}"
+            query_filter = [
+                {
+                    "fieldName": "parentId",
+                    "comparator": "EQUALS",
+                    "fieldValue": {"type": "STRING", "value": record_id},
+                }
+            ]
+            result[path] = PhotoAlbum(
+                self.params,
+                self.session,
+                self.service_endpoint,
+                path,
+                "CPLContainerRelationLiveByAssetDate",
+                obj_type,
+                query_filter,
+                zone_id=self.zone_id,
+            )
+
+        return result
 
     def _fetch_folders(self) -> Sequence[Dict[str, Any]]:
         if self.library_type == "shared":

@@ -132,7 +132,7 @@ def add_options_for_user(parser: argparse.ArgumentParser) -> argparse.ArgumentPa
     )
     cloned.add_argument(
         "--folder-structure",
-        help="Folder structure. If set to `none`, all photos will be placed into the download directory. Default: %(default)s",
+        help="Folder structure. If set to `none`, all photos will be placed into the download directory. If set to `album`, photos are organised into folders matching the iOS Photos app album/folder hierarchy. Default: %(default)s",
         default="{:%Y/%m/%d}",
         type=validate_folder_structure,
     )
@@ -610,8 +610,8 @@ def cli() -> int:
 
 
 def validate_folder_structure(folder_structure: str) -> str:
-    if lower(folder_structure) == "none":
-        return "none"
+    if lower(folder_structure) in ("none", "album"):
+        return lower(folder_structure)
     else:
         try:
             folder_structure.format(datetime.datetime.now())
