@@ -6,6 +6,11 @@ from unittest.mock import MagicMock
 
 from freezegun import freeze_time
 
+from icloudpd.base import create_logger
+from icloudpd.config import GlobalConfig
+from icloudpd.log_level import LogLevel
+from icloudpd.mfa_provider import MFAProvider
+from icloudpd.password_provider import PasswordProvider
 from icloudpd.logger import IPDLogger, setup_logger
 
 
@@ -57,3 +62,30 @@ class LoggerTestCase(TestCase):
         logger.log.assert_not_called()
 
         logger.set_tqdm(None)  # type: ignore[attr-defined]
+
+    def test_create_logger_propagates_level_to_pyicloud(self) -> None:
+        pyicloud_logger = logging.getLogger("pyicloud_ipd")
+        original_pyi_level = pyicloud_logger.level
+        try:
+            create_logger(
+                GlobalConfig(
+                    help=False,
+                    version=False,
+                    use_os_locale=False,
+                    only_print_filenames=False,
+                    log_level=LogLevel.DEBUG,
+                    no_progress_bar=False,
+                    threads_num=1,
+                    domain="com",
+                    watch_with_interval=None,
+                    password_providers=[
+                        PasswordProvider.PARAMETER,
+                        PasswordProvider.KEYRING,
+                        PasswordProvider.CONSOLE,
+                    ],
+                    mfa_provider=MFAProvider.CONSOLE,
+                )
+            )
+            self.assertEqual(pyicloud_logger.level, logging.DEBUG)
+        finally:
+            pyicloud_logger.setLevel(original_pyi_level)

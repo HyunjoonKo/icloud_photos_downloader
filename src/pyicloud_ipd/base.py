@@ -306,8 +306,10 @@ class PyiCloudService:
         if not login_successful:
             password = self.password_provider()
             if not password:
-                LOGGER.debug("Password Provider did not give any data")
-                return None
+                raise PyiCloudFailedLoginException(
+                    "No password available. In non-interactive environments, "
+                    "re-authenticate manually: docker run -it ... --auth-only"
+                )
             # set logging filter
             self.password_filter = PyiCloudPasswordFilter(password)
             LOGGER.addFilter(self.password_filter)

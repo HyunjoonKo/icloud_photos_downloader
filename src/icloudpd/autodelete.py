@@ -7,6 +7,11 @@ import logging
 import os
 from typing import Callable, Sequence, Set
 
+from icloudpd.album_mode import (
+    load_album_mode_index,
+    remove_from_album_mode_index,
+    save_album_mode_index,
+)
 from tzlocal import get_localzone
 
 from icloudpd.paths import local_download_path
@@ -56,8 +61,11 @@ def autodelete_photos(
 
     recently_deleted = library_object.recently_deleted
 
+    album_mode_index = load_album_mode_index(directory) if is_album_mode else {}
+    deleted_asset_ids: Set[str] = set()
+
     # In album mode, build a lookup of filenames → full paths by walking the directory once.
-    # This avoids repeated os.walk calls per media item.
+    # Only unique basenames are used as a safe fallback when the persistent index is missing.
     if is_album_mode:
         filename_to_paths: dict[str, Set[str]] = {}
         for root, _, files in os.walk(directory):
@@ -105,11 +113,44 @@ def autodelete_photos(
                 filenames.add(version_filename + ".xmp")
 
         if is_album_mode:
-            # Search the pre-built filename index for matching files anywhere in the tree
-            for filename in filenames:
-                for path in filename_to_paths.get(filename, set()):
-                    logger.debug("Deleting %s...", path)
-                    delete_local(logger, path)
+            deleted_paths: Set[str] = set()
+
+            resolved_root = os.path.realpath(directory)
+            for relative_path in album_mode_index.get(media.id, set()):
+                path = os.path.normpath(os.path.join(directory, relative_path))
+                real_path = os.path.realpath(path)
+                if not real_path.startswith(resolved_root + os.sep) and real_path != resolved_root:
+                    logger.warning("Skipping out-of-root index path: %s", relative_path)
+                    continue
+                if os.path.exists(path):
+                    deleted_paths.add(path)
+
+            if not deleted_paths:
+                ambiguous_filenames: Set[str] = set()
+                for filename in filenames:
+                    candidate_paths = {p for p in filename_to_paths.get(filename, set()) if os.path.exists(p)}
+                    if len(candidate_paths) == 1:
+                        deleted_paths.update(candidate_paths)
+                    elif len(candidate_paths) > 1:
+                        ambiguous_filenames.add(filename)
+
+                if ambiguous_filenames:
+                    logger.warning(
+                        "Skipping ambiguous album-mode delete for %s (matches: %s)",
+                        media.id,
+                        ", ".join(sorted(ambiguous_filenames)),
+                    )
+
+            for path in sorted(deleted_paths):
+                logger.debug("Deleting %s...", path)
+                delete_local(logger, path)
+                # Update filename_to_paths so subsequent fallback checks see current state
+                basename = os.path.basename(path)
+                if basename in filename_to_paths:
+                    filename_to_paths[basename].discard(path)
+
+            if deleted_paths and not dry_run:
+                deleted_asset_ids.add(media.id)
         else:
             if is_none_folder(folder_structure):
                 date_path = ""
@@ -133,3 +174,7 @@ def autodelete_photos(
                 if os.path.exists(path):
                     logger.debug("Deleting %s...", path)
                     delete_local(logger, path)
+
+    if is_album_mode and deleted_asset_ids and not dry_run:
+        updated_index = remove_from_album_mode_index(album_mode_index, deleted_asset_ids)
+        save_album_mode_index(directory, updated_index)

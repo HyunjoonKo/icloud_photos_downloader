@@ -33,6 +33,10 @@ This is a list of all options available for the command line interface (CLI) of 
 
     When not specified, the whole asset collection is considered.
 
+    With `--folder-structure album`, the value is treated as an exact album path
+    or a folder path prefix, so `Trips` downloads everything below `Trips/...`
+    while `Trips/2024/Seoul` targets that nested album path exactly.
+
     ```{versionchanged} 1.31.0
     Option may be specified multiple times to download from different albums
     ```    

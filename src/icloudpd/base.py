@@ -39,6 +39,14 @@ from tqdm.contrib.logging import logging_redirect_tqdm
 from tzlocal import get_localzone
 
 from foundation.core import compose, identity, map_, partial_1_1
+from icloudpd.album_mode import (
+    AlbumModeIndex,
+    load_album_mode_index,
+    merge_album_mode_index,
+    relative_album_mode_path,
+    save_album_mode_index,
+    select_folder_album_paths,
+)
 from icloudpd import download, exif_datetime
 from icloudpd.authentication import authenticator
 from icloudpd.autodelete import autodelete_photos
@@ -126,7 +134,11 @@ def lp_filename_original(filename: str) -> str:
 
 
 def ask_password_in_console(_user: str) -> str | None:
-    return getpass.getpass(f"iCloud Password for {_user}:")
+    try:
+        return getpass.getpass(f"iCloud Password for {_user}:")
+    except (EOFError, OSError):
+        # Non-interactive environment (e.g. Docker without -it): no TTY available
+        return None
 
 
 def get_password_from_webui(
@@ -223,14 +235,18 @@ def create_logger(config: GlobalConfig) -> logging.Logger:
         # because the logger instance is shared between tests.
         logger.disabled = False
         if config.log_level == LogLevel.DEBUG:
-            logger.setLevel(logging.DEBUG)
+            level = logging.DEBUG
         elif config.log_level == LogLevel.INFO:
-            logger.setLevel(logging.INFO)
+            level = logging.INFO
         elif config.log_level == LogLevel.ERROR:
-            logger.setLevel(logging.ERROR)
+            level = logging.ERROR
         else:
             # Developer's error - not an exhaustive match
             raise ValueError(f"Unsupported logging level {config.log_level}")
+        logger.setLevel(level)
+        # Align pyicloud_ipd logger level so --log-level also affects
+        # lower-level HTTP/session debug output used during Docker troubleshooting.
+        logging.getLogger("pyicloud_ipd").setLevel(level)
     return logger
 
 
@@ -397,7 +413,11 @@ def _process_all_users_once(
                 filename_builder,
             )
 
-            def make_downloader(folder_structure: str, directory: str) -> Callable:
+            def make_downloader(
+                folder_structure: str,
+                directory: str,
+                path_recorder: Callable[[PhotoAsset, Sequence[str]], None] | None = None,
+            ) -> Callable:
                 return (
                     partial(
                         download_builder,
@@ -416,6 +436,7 @@ def _process_all_users_once(
                         lp_filename_generator,
                         filename_builder,
                         user_config.align_raw,
+                        path_recorder,
                     )
                     if directory is not None
                     else (lambda _s, _c, _p: False)
@@ -582,6 +603,7 @@ def download_builder(
     lp_filename_generator: Callable[[str], str],
     filename_builder: Callable[[PhotoAsset], str],
     raw_policy: RawTreatmentPolicy,
+    path_recorder: Callable[[PhotoAsset, Sequence[str]], None] | None,
     icloud: PyiCloudService,
     counter: Counter,
     photo: PhotoAsset,
@@ -638,6 +660,7 @@ def download_builder(
 
     download_dir = os.path.normpath(os.path.join(directory, date_path))
     success = False
+    resolved_paths: Set[str] = set()
 
     for download_size in primary_sizes:
         if download_size not in versions and download_size != AssetVersionSize.ORIGINAL:
@@ -686,7 +709,9 @@ def download_builder(
                     file_exists = os.path.isfile(download_path)
             if file_exists:
                 counter.increment()
-                logger.debug("%s already exists", truncate_middle(download_path, 96))
+                actual_path = original_download_path if original_download_path and os.path.isfile(original_download_path) else download_path
+                logger.debug("%s already exists", truncate_middle(actual_path, 96))
+                resolved_paths.add(actual_path)
 
         if not file_exists:
             counter.reset()
@@ -709,6 +734,7 @@ def download_builder(
                 success = download_result
 
                 if download_result:
+                    resolved_paths.add(download_path)
                     from foundation.core import compose
                     from foundation.string_utils import endswith, lower
 
@@ -734,6 +760,8 @@ def download_builder(
 
         if xmp_sidecar:
             generate_xmp_file(logger, download_path, photo._asset_record, dry_run)
+            if not dry_run and (os.path.exists(download_path) or download_path in resolved_paths):
+                resolved_paths.add(download_path + ".xmp")
 
     # Also download the live photo if present
     if not skip_live_photos:
@@ -791,6 +819,7 @@ def download_builder(
                             lp_file_exists = os.path.isfile(lp_download_path)
                     if lp_file_exists:
                         logger.debug("%s already exists", truncate_middle(lp_download_path, 96))
+                        resolved_paths.add(lp_download_path)
                 if not lp_file_exists:
                     truncated_path = truncate_middle(lp_download_path, 96)
                     logger.debug("Downloading %s...", truncated_path)
@@ -806,7 +835,10 @@ def download_builder(
                     )
                     success = download_result and success
                     if download_result:
+                        resolved_paths.add(lp_download_path)
                         logger.info("Downloaded %s", truncated_path)
+    if path_recorder is not None and resolved_paths:
+        path_recorder(photo, sorted(resolved_paths))
     return success
 
 
@@ -889,7 +921,10 @@ def core_single_run(
     downloader: Callable[[PyiCloudService, Counter, PhotoAsset], bool],
     notificator: Callable[[], None],
     lp_filename_generator: Callable[[str], str],
-    make_downloader: Callable[[str, str], Callable] | None = None,
+    make_downloader: Callable[
+        [str, str, Callable[[PhotoAsset, Sequence[str]], None] | None], Callable
+    ]
+    | None = None,
 ) -> int:
     """Download all iCloud photos to a local directory for a single execution (no watch loop)"""
 
@@ -957,6 +992,11 @@ def core_single_run(
                     print("Albums:")
                     album_titles = [str(a) for a in library_object.albums.values()]
                     print(*album_titles, sep="\n")
+                    folder_albums = library_object.folder_albums
+                    if folder_albums:
+                        print("\nFolder Structure (for --folder-structure album):")
+                        for path in sorted(folder_albums.keys()):
+                            print(f"  {path}")
                     return 0
                 else:
                     if not user_config.directory:
@@ -982,22 +1022,47 @@ def core_single_run(
                         folder_albums_dict = library_object.folder_albums
                         # Filter to specific albums if --album was specified
                         if user_config.albums:
+                            matched_paths, unmatched_paths = select_folder_album_paths(
+                                user_config.albums, tuple(folder_albums_dict.keys())
+                            )
+                            if unmatched_paths:
+                                logger.error(
+                                    "Unknown folder or album path(s): %s",
+                                    ", ".join(unmatched_paths),
+                                )
+                                return 1
                             folder_albums_dict = {
                                 path: album
                                 for path, album in folder_albums_dict.items()
-                                if any(
-                                    requested in path
-                                    for requested in user_config.albums
-                                )
+                                if path in matched_paths
                             }
                         downloaded_ids: Set[str] = set()
+                        album_mode_updates: AlbumModeIndex = {}
+                        existing_album_mode_index = (
+                            load_album_mode_index(directory)
+                            if not (user_config.dry_run or global_config.only_print_filenames)
+                            else {}
+                        )
+
+                        def record_album_mode_paths(
+                            photo: PhotoAsset, full_paths: Sequence[str]
+                        ) -> None:
+                            relative_paths = {
+                                relative_album_mode_path(directory, path)
+                                for path in full_paths
+                                if path
+                            }
+                            if relative_paths:
+                                album_mode_updates.setdefault(photo.id, set()).update(relative_paths)
 
                         # Phase 1: download each user-created album to its folder path
                         for album_path, photo_album in sorted(folder_albums_dict.items()):
                             album_dir = os.path.normpath(
                                 os.path.join(directory, album_path)
                             )
-                            album_downloader = make_downloader("none", album_dir)
+                            album_downloader = make_downloader(
+                                "none", album_dir, record_album_mode_paths
+                            )
                             download_photo_album = partial(album_downloader, icloud)
 
                             logger.info(
@@ -1016,7 +1081,9 @@ def core_single_run(
                         # Phase 2: download photos not in any album to root
                         # (skipped when --album filter is active)
                         if not status_exchange.get_progress().cancel and not user_config.albums:
-                            root_downloader = make_downloader("none", directory)
+                            root_downloader = make_downloader(
+                                "none", directory, record_album_mode_paths
+                            )
                             download_photo_root = partial(root_downloader, icloud)
                             logger.info(
                                 "Downloading photos not in any album to %s ...", directory
@@ -1024,6 +1091,12 @@ def core_single_run(
                             for item in library_object.all:
                                 if item.id not in downloaded_ids and passer(item):
                                     download_photo_root(Counter(0), item)
+
+                        if not (user_config.dry_run or global_config.only_print_filenames):
+                            merged_album_mode_index = merge_album_mode_index(
+                                existing_album_mode_index, album_mode_updates
+                            )
+                            save_album_mode_index(directory, merged_album_mode_index)
 
                         if global_config.only_print_filenames:
                             return 0
@@ -1037,7 +1110,7 @@ def core_single_run(
                                 logger,
                                 user_config.dry_run,
                                 library_object,
-                                "none",
+                                "album",
                                 directory,
                                 user_config.sizes,
                                 lp_filename_generator,
@@ -1272,7 +1345,7 @@ def core_single_run(
                                 user_config.align_raw,
                             )
         except PyiCloudFailedLoginException as error:
-            logger.info(error)
+            logger.error(error)
             dump_responses(logger.debug, captured_responses)
             if PasswordProvider.WEBUI in global_config.password_providers:
                 update_auth_error_in_webui(status_exchange, str(error))

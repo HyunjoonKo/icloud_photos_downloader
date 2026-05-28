@@ -8,6 +8,7 @@ from typing import Sequence, Tuple
 from unittest import TestCase
 
 import pytest
+from tzlocal import get_localzone
 
 from icloudpd.cli import format_help, parse
 from icloudpd.config import GlobalConfig, UserConfig
@@ -79,7 +80,7 @@ class CliTestCase(TestCase):
                     version=False,
                     use_os_locale=False,
                     only_print_filenames=False,
-                    log_level=LogLevel.DEBUG,
+                    log_level=LogLevel.INFO,
                     no_progress_bar=False,
                     threads_num=1,
                     domain="com",
@@ -103,7 +104,7 @@ class CliTestCase(TestCase):
                     version=False,
                     use_os_locale=False,
                     only_print_filenames=False,
-                    log_level=LogLevel.DEBUG,
+                    log_level=LogLevel.INFO,
                     no_progress_bar=False,
                     threads_num=1,
                     domain="com",
@@ -136,7 +137,7 @@ class CliTestCase(TestCase):
                     version=False,
                     use_os_locale=False,
                     only_print_filenames=False,
-                    log_level=LogLevel.DEBUG,
+                    log_level=LogLevel.INFO,
                     no_progress_bar=False,
                     threads_num=1,
                     domain="com",
@@ -156,7 +157,7 @@ class CliTestCase(TestCase):
                     version=True,
                     use_os_locale=True,
                     only_print_filenames=False,
-                    log_level=LogLevel.DEBUG,
+                    log_level=LogLevel.INFO,
                     no_progress_bar=False,
                     threads_num=1,
                     domain="com",
@@ -182,7 +183,7 @@ class CliTestCase(TestCase):
                     version=False,
                     use_os_locale=False,
                     only_print_filenames=False,
-                    log_level=LogLevel.DEBUG,
+                    log_level=LogLevel.INFO,
                     no_progress_bar=False,
                     threads_num=1,
                     domain="com",
@@ -298,7 +299,7 @@ class CliTestCase(TestCase):
                     version=False,
                     use_os_locale=False,
                     only_print_filenames=False,
-                    log_level=LogLevel.DEBUG,
+                    log_level=LogLevel.INFO,
                     no_progress_bar=False,
                     threads_num=1,
                     domain="com",
@@ -348,7 +349,7 @@ class CliTestCase(TestCase):
                         align_raw=RawTreatmentPolicy.AS_IS,
                         file_match_policy=FileMatchPolicy.NAME_SIZE_DEDUP_WITH_SUFFIX,
                         skip_created_before=datetime.datetime(
-                            year=2025, month=1, day=2, tzinfo=zoneinfo.ZoneInfo(key="Etc/UTC")
+                            year=2025, month=1, day=2, tzinfo=get_localzone()
                         ),
                         skip_created_after=datetime.timedelta(days=2),
                         skip_photos=False,

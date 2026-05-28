@@ -26,7 +26,7 @@ Specifying `--folder-structure album` organizes photos to mirror the iCloud Phot
 - Photos that belong to an album are saved under the album's path, e.g. `Influencer/Model A/photo.jpg`
 - Nested folders are supported: `ParentFolder/SubFolder/AlbumName/photo.jpg`
 - Photos not assigned to any album are saved directly in the root `--directory`
-- Use `--album <name>` together with `--folder-structure album` to limit the download to a specific folder or album
+- Use `--album <path>` together with `--folder-structure album` to limit the download to a specific album path, or to a folder path prefix that includes all nested folders and albums below it
 
 ```shell
 icloudpd --directory /data --username my@email.address --folder-structure album

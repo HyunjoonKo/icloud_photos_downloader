@@ -12,12 +12,13 @@ from vcr import VCR
 import pyicloud_ipd
 from foundation.core import constant
 from icloudpd.authentication import authenticator
-from icloudpd.base import dummy_password_writter
+from icloudpd.base import ask_password_in_console, dummy_password_writter
 from icloudpd.logger import setup_logger
 from icloudpd.mfa_provider import MFAProvider
 from icloudpd.status import StatusExchange
+from pyicloud_ipd.base import PyiCloudService
 from pyicloud_ipd.sms import parse_trusted_phone_numbers_payload
-from tests.helpers import path_from_project_root, recreate_path, run_cassette
+from tests.helpers import DEFAULT_ENV, path_from_project_root, recreate_path, run_cassette, run_main_env
 
 vcr = VCR(decode_compressed_response=True, record_mode="none")
 
@@ -57,6 +58,59 @@ class AuthenticationTestCase(TestCase):
         #     result.output,
         # )
         self.assertTrue("Invalid email/password combination." in str(context.exception))
+
+    def test_non_interactive_password_prompt_returns_none(self) -> None:
+        with mock.patch("getpass.getpass", side_effect=EOFError):
+            self.assertIsNone(ask_password_in_console("jdoe@gmail.com"))
+
+        with mock.patch("getpass.getpass", side_effect=OSError):
+            self.assertIsNone(ask_password_in_console("jdoe@gmail.com"))
+
+    def test_missing_password_raises_failed_login_with_reauth_guidance(self) -> None:
+        with self.assertRaises(pyicloud_ipd.exceptions.PyiCloudFailedLoginException) as context:
+            PyiCloudService(
+                "com",
+                "jdoe@gmail.com",
+                lambda: None,
+                lambda _response: None,
+                cookie_directory=None,
+                client_id="test-client-id",
+            )
+
+        self.assertIn("No password available.", str(context.exception))
+        self.assertIn("docker run -it ... --auth-only", str(context.exception))
+
+    def test_non_interactive_failed_login_is_logged_at_error_level(self) -> None:
+        base_dir = os.path.join(self.fixtures_path, inspect.stack()[0][3])
+        cookie_dir = os.path.join(base_dir, "cookie")
+
+        for dir in [base_dir, cookie_dir]:
+            recreate_path(dir)
+
+        with mock.patch(
+            "icloudpd.base.authenticator",
+            side_effect=pyicloud_ipd.exceptions.PyiCloudFailedLoginException(
+                "No password available. In non-interactive environments, "
+                "re-authenticate manually: docker run -it ... --auth-only"
+            ),
+        ):
+            result = run_main_env(
+                DEFAULT_ENV,
+                [
+                    "--username",
+                    "jdoe@gmail.com",
+                    "--cookie-directory",
+                    cookie_dir,
+                    "--directory",
+                    base_dir,
+                    "--auth-only",
+                    "--log-level",
+                    "error",
+                ],
+            )
+
+        self.assertIn("No password available.", result.output)
+        self.assertEqual(result.exit_code, 1, "exit code")
 
     @pytest.mark.skip(reason="No longer support fallback to raw")
     def test_fallback_raw_password(self) -> None:
